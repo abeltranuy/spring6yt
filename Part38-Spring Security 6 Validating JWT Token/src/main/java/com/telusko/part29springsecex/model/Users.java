@@ -10,14 +10,19 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
+// La restriccion va a nivel de tabla y con nombre porque ddl-auto=update solo aplica
+// @Column(unique = true) a columnas nuevas; asi tambien la crea sobre una tabla users ya existente.
 @Entity
+@Table(uniqueConstraints = @UniqueConstraint(name = "uk_users_username", columnNames = "username"))
 public class Users {
-	
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private int id;
-    @Column(unique = true, nullable = false)
+    @Column(nullable = false)
     private String username;
     @JsonIgnore
     @Column(nullable = false)
