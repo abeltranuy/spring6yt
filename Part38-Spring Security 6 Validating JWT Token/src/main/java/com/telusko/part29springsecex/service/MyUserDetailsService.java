@@ -15,7 +15,6 @@ public class MyUserDetailsService implements UserDetailsService {
     @Autowired
     private UserRepo userRepo;
 
-
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         Users user = userRepo.findByUsername(username);
@@ -23,7 +22,23 @@ public class MyUserDetailsService implements UserDetailsService {
             System.out.println("User Not Found");
             throw new UsernameNotFoundException("user not found");
         }
-        
+        /*
+        Account account = accountRepository.findByEmail(email)
+                .orElseThrow(() ->
+                        new UsernameNotFoundException(email + " not found." ));
+
+        Set<GrantedAuthority> authorities = account
+                .getRoles()
+                .stream()
+                .map((role) -> new SimpleGrantedAuthority(role.getErole().name()))
+                .collect(Collectors.toSet());
+
+        return new org.springframework.security.core.userdetails.User(
+                account.getEmail(),
+                account.getPassword(),
+                authorities
+        );
+        */
         return new UserPrincipal(user);
     }
 }
