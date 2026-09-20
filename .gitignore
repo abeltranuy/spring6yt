@@ -1,0 +1,43 @@
+# Se aplica a todos los proyectos PartNN del repositorio.
+# Un .gitignore no afecta a archivos que ya estan rastreados: solo evita que se agreguen nuevos.
+
+### Maven ###
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### Eclipse / STS ###
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### VS Code ###
+.vscode/
+
+### Node (frontends y plantillas estaticas) ###
+node_modules/
+
+### Sistema operativo y logs ###
+.DS_Store
+Thumbs.db
+*.log
+
+### Claude Code (configuracion local) ###
+.claude/
