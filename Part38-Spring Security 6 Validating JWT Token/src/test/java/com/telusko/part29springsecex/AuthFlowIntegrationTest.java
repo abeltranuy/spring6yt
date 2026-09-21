@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -179,6 +180,24 @@ class AuthFlowIntegrationTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().doesNotExist("WWW-Authenticate"))
                 .andExpect(jsonPath("$.message").isNotEmpty());
+    }
+
+    @Test
+    void deleteStudentRequiresTokenAndRemovesIt() throws Exception {
+        String username = newUsername();
+        register(username);
+        String token = loginAndGetToken(username, PASSWORD);
+
+        mvc.perform(post("/students").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"id\":901,\"name\":\"Temporal\",\"marks\":50}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(delete("/students/901"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(delete("/students/901").header("Authorization", "Bearer " + token))
+                .andExpect(status().isNoContent());
+        mvc.perform(delete("/students/901").header("Authorization", "Bearer " + token))
+                .andExpect(status().isNotFound());
     }
 
     @Test

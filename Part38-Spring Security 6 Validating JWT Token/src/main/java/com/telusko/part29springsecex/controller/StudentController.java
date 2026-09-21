@@ -2,8 +2,11 @@ package com.telusko.part29springsecex.controller;
 
 import com.telusko.part29springsecex.model.Student;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,6 +37,13 @@ public class StudentController {
     public Student addStudent(@RequestBody Student student) {
         students.add(student);
         return student;
+    }
+
+    // Lo usa el boton de eliminar de usuarios.html
+    @DeleteMapping("/students/{id}")
+    public ResponseEntity<Void> deleteStudent(@PathVariable int id) {
+        boolean removed = students.removeIf(student -> student.getId() == id);
+        return removed ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
 }
