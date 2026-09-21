@@ -1,0 +1,39 @@
+node_modules
+
+# Esta carpeta es la plantilla SB Admin 2 (MIT) mas las paginas propias:
+# login.html, registrar.html, usuarios.html y sus js. Solo se versiona lo propio y los
+# recursos de la plantilla que esas paginas cargan. Un archivo NUEVO tuyo (otra pagina,
+# otro js, otro css) no esta ignorado y aparece en `git status` como siempre.
+
+# Librerias de terceros. Lo que usan las paginas esta versionado igualmente, porque se
+# agrego con `git add -f`; para sumar otra libreria hay que usar `git add -f` tambien.
+/vendor/
+
+# Partes de la plantilla que las paginas propias no usan
+/scss/
+/js/demo/
+/js/sb-admin-2.js
+/css/sb-admin-2.css
+/img/undraw_posting_photo.svg
+/img/undraw_profile_1.svg
+/img/undraw_profile_2.svg
+/img/undraw_profile_3.svg
+/img/undraw_rocket.svg
+/404.html
+/blank.html
+/buttons.html
+/cards.html
+/charts.html
+/forgot-password.html
+/index.html
+/utilities-animation.html
+/utilities-border.html
+/utilities-color.html
+/utilities-other.html
+/gulpfile.js
+/package.json
+/package-lock.json
+/.browserslistrc
+/.travis.yml
+/README.md
+/PRO_UPGRADE.txt
