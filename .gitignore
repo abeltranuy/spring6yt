@@ -41,3 +41,6 @@ Thumbs.db
 
 ### Claude Code (configuracion local) ###
 .claude/
+
+### Claves de firma del servidor de autorizacion (contienen la clave privada) ###
+auth-server-keys/
