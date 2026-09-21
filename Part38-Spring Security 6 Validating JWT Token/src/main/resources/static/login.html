@@ -43,16 +43,11 @@
                                     </div>
                                     <div id="mensaje" class="d-none" role="alert"></div>
                                     <form class="user">
-                                        <div class="form-group">
-                                            <input type="email" class="form-control form-control-user"
-                                                id="txtEmail" aria-describedby="emailHelp"
-                                                placeholder="Ingresa tu Email">
-                                        </div>
-                                        <div class="form-group">
-                                            <input type="password" class="form-control form-control-user"
-                                                id="txtPassword" placeholder="Password">
-                                        </div>
-                                        <a onclick="iniciarSesion()" href="#" class="btn btn-primary btn-user btn-block">
+                                        <p class="small text-gray-600 text-center">
+                                            Tu usuario y tu clave se escriben en el servidor de autorización,
+                                            no en esta página.
+                                        </p>
+                                        <a href="/oauth2/authorization/auth-server" class="btn btn-primary btn-user btn-block">
                                             Iniciar Sesión
                                         </a>
 

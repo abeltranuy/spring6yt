@@ -21,10 +21,8 @@ async function registrarUsuario() {
   try {
     request = await fetch('/registrar', {
       method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-      },
+      // incluye la cabecera X-XSRF-TOKEN: /registrar es publica pero sigue protegida contra CSRF
+      headers: cabecerasJson(),
       body: JSON.stringify(datos)
     });
   } catch (e) {

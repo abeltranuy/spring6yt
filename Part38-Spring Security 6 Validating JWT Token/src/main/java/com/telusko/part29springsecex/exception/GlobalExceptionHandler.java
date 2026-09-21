@@ -6,19 +6,12 @@ import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
-
-    // Mismo mensaje para "usuario no existe" y "password incorrecto": no revela que usuarios existen
-    @ExceptionHandler(AuthenticationException.class)
-    public ResponseEntity<MessageResponse> handleAuthentication(AuthenticationException ex) {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new MessageResponse("Invalid Username or Password"));
-    }
 
     @ExceptionHandler(UsernameAlreadyExistsException.class)
     public ResponseEntity<MessageResponse> handleUsernameTaken(UsernameAlreadyExistsException ex) {

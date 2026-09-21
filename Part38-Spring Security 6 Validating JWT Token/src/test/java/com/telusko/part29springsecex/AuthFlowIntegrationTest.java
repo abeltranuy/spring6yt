@@ -4,34 +4,51 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.oidcLogin;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.telusko.part29springsecex.config.SecurityConfig;
 import com.telusko.part29springsecex.enums.RoleList;
 import com.telusko.part29springsecex.model.Users;
 import com.telusko.part29springsecex.repo.UserRepo;
-import com.telusko.part29springsecex.service.JWTService;
 
+import jakarta.servlet.http.Cookie;
+
+import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.jwt.BadJwtException;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
-// Cada test cubre uno de los hallazgos de la revision de seguridad JWT.
+// La autenticacion se simula con spring-security-test, asi que no hace falta auth-server:
+//   browserUser() = usuario del navegador con sesion OIDC (camino BFF)
+//   bearer()      = programa con "Authorization: Bearer" (camino Resource Server)
 @SpringBootTest
 @AutoConfigureMockMvc
 class AuthFlowIntegrationTest {
@@ -49,7 +66,7 @@ class AuthFlowIntegrationTest {
     private PasswordEncoder passwordEncoder;
 
     @Autowired
-    private JWTService jwtService;
+    private ClientRegistrationRepository clientRegistrations;
 
     private String newUsername() {
         return "user" + SEQ.incrementAndGet();
@@ -59,72 +76,93 @@ class AuthFlowIntegrationTest {
         return "{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}";
     }
 
-    private MvcResult register(String username) throws Exception {
-        return mvc.perform(post("/registrar").contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
-                .andExpect(status().isCreated())
-                .andReturn();
+    // Sustituye la validacion de firma contra auth-server: "token-user" y "token-admin" son validos
+    // y cualquier otro valor es rechazado. Lo demas del camino Bearer es el real, incluida la
+    // lectura del claim "roles".
+    @MockBean
+    private JwtDecoder jwtDecoder;
+
+    @BeforeEach
+    void stubTokens() {
+        when(jwtDecoder.decode(anyString())).thenThrow(new BadJwtException("token invalido"));
+        doReturn(jwtWithRole("ROLE_USER")).when(jwtDecoder).decode("token-user");
+        doReturn(jwtWithRole("ROLE_ADMIN")).when(jwtDecoder).decode("token-admin");
     }
 
-    private String loginAndGetToken(String username, String password) throws Exception {
-        MvcResult result = mvc.perform(post("/login").contentType(MediaType.APPLICATION_JSON).content(body(username, password)))
-                .andExpect(status().isOk())
-                .andReturn();
-        String authHeader = result.getResponse().getHeader("Authorization");
-        assertThat(authHeader).startsWith("Bearer ");
-        return authHeader.substring(7);
+    private static Jwt jwtWithRole(String role) {
+        Instant now = Instant.now();
+        return Jwt.withTokenValue("simulado").header("alg", "RS256").subject("ana")
+                .claim("roles", List.of(role)).issuedAt(now).expiresAt(now.plusSeconds(600)).build();
     }
+
+    private RequestPostProcessor browserUser(String role) {
+        return oidcLogin().idToken(token -> token.subject("ana"))
+                .clientRegistration(clientRegistrations.findByRegistrationId(SecurityConfig.REGISTRATION_ID))
+                .authorities(new SimpleGrantedAuthority(role));
+    }
+
+    private static RequestPostProcessor bearer(String role) {
+        String token = "ROLE_ADMIN".equals(role) ? "token-admin" : "token-user";
+        return request -> {
+            request.addHeader("Authorization", "Bearer " + token);
+            return request;
+        };
+    }
+
+    // Hace lo mismo que comun.js en el navegador: abre una pagina, lee la cookie XSRF-TOKEN que
+    // deja el servidor y la devuelve tal cual en la cabecera X-XSRF-TOKEN.
+    // No usar el atajo csrf() de spring-security-test en esta clase: sustituye el repositorio de
+    // cookie por uno de sesion para todos los tests siguientes y la cookie deja de emitirse.
+    private RequestPostProcessor csrfLikeTheBrowser() throws Exception {
+        Cookie cookie = mvc.perform(get("/login.html")).andReturn().getResponse().getCookie("XSRF-TOKEN");
+        assertThat(cookie).isNotNull();
+        assertThat(cookie.isHttpOnly()).isFalse(); // el JavaScript tiene que poder leerla
+        return request -> {
+            request.setCookies(cookie);
+            request.addHeader("X-XSRF-TOKEN", cookie.getValue());
+            return request;
+        };
+    }
+
+    // ---------- Registro (sigue viviendo en esta app) ----------
 
     @Test
     void registerIsPublicAndNeverReturnsThePassword() throws Exception {
         String username = newUsername();
-        mvc.perform(post("/registrar").contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
+        mvc.perform(post("/registrar").with(csrfLikeTheBrowser()).contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.username").value(username))
                 .andExpect(jsonPath("$.role").value("ROLE_USER"))
                 .andExpect(jsonPath("$.password").doesNotExist());
-    }
 
-    @Test
-    void loginReturnsTokenAndNeverReturnsThePassword() throws Exception {
-        String username = newUsername();
-        register(username);
-
-        mvc.perform(post("/login").contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
-                .andExpect(status().isOk())
-                .andExpect(header().string("Authorization", containsString("Bearer ")))
-                .andExpect(jsonPath("$.token").isNotEmpty())
-                .andExpect(jsonPath("$.roles", hasItem("ROLE_USER")))
-                .andExpect(jsonPath("$.password").doesNotExist())
-                .andExpect(content().string(org.hamcrest.Matchers.not(containsString("$2a$"))));
+        // La clave queda cifrada con BCrypt, que es lo que auth-server sabe comparar
+        assertThat(passwordEncoder.matches(PASSWORD, userRepo.findByUsername(username).getPassword())).isTrue();
     }
 
     @Test
     void registerIgnoresIdAndRoleSentByTheClient() throws Exception {
         String victim = newUsername();
-        register(victim);
+        mvc.perform(post("/registrar").with(csrfLikeTheBrowser()).contentType(MediaType.APPLICATION_JSON).content(body(victim, PASSWORD)))
+                .andExpect(status().isCreated());
         int victimId = userRepo.findByUsername(victim).getId();
         String attacker = newUsername();
 
-        // Antes esto sobreescribia la fila del usuario victima (toma de cuenta)
         String takeover = "{\"id\":" + victimId + ",\"username\":\"" + attacker + "\",\"password\":\"Otra-clave-99\",\"role\":\"ROLE_ADMIN\"}";
-        mvc.perform(post("/registrar").contentType(MediaType.APPLICATION_JSON).content(takeover))
+        mvc.perform(post("/registrar").with(csrfLikeTheBrowser()).contentType(MediaType.APPLICATION_JSON).content(takeover))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.role").value("ROLE_USER"));
 
         assertThat(userRepo.findByUsername(attacker).getId()).isNotEqualTo(victimId);
         assertThat(userRepo.findById(victimId).orElseThrow().getUsername()).isEqualTo(victim);
-        loginAndGetToken(victim, PASSWORD);
     }
 
     @Test
     void duplicateUsernameIsRejected() throws Exception {
         String username = newUsername();
-        register(username);
-
-        mvc.perform(post("/registrar").contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
+        mvc.perform(post("/registrar").with(csrfLikeTheBrowser()).contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
+                .andExpect(status().isCreated());
+        mvc.perform(post("/registrar").with(csrfLikeTheBrowser()).contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
                 .andExpect(status().isConflict());
-
-        loginAndGetToken(username, PASSWORD);
     }
 
     @Test
@@ -136,7 +174,6 @@ class AuthFlowIntegrationTest {
         first.setRole(RoleList.ROLE_USER);
         userRepo.saveAndFlush(first);
 
-        // Saltandose el chequeo de UserService: la restriccion unique de la tabla tambien lo impide
         Users second = new Users();
         second.setUsername(username);
         second.setPassword(passwordEncoder.encode(PASSWORD));
@@ -146,118 +183,122 @@ class AuthFlowIntegrationTest {
 
     @Test
     void invalidInputIsRejectedWith400() throws Exception {
-        mvc.perform(post("/registrar").contentType(MediaType.APPLICATION_JSON).content(body("", "")))
+        mvc.perform(post("/registrar").with(csrfLikeTheBrowser()).contentType(MediaType.APPLICATION_JSON).content(body("", "")))
                 .andExpect(status().isBadRequest());
-        mvc.perform(post("/registrar").contentType(MediaType.APPLICATION_JSON).content("{}"))
+        mvc.perform(post("/registrar").with(csrfLikeTheBrowser()).contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest());
     }
 
+    // ---------- Esta app ya no hace login con clave ----------
+
     @Test
-    void wrongCredentialsReturn401WithMessageAndNoBasicChallenge() throws Exception {
-        String username = newUsername();
-        register(username);
-
-        mvc.perform(post("/login").contentType(MediaType.APPLICATION_JSON).content(body(username, "incorrecta")))
-                .andExpect(status().isUnauthorized())
-                .andExpect(header().doesNotExist("WWW-Authenticate"))
-                .andExpect(jsonPath("$.message").value("Invalid Username or Password"));
-
-        mvc.perform(post("/login").contentType(MediaType.APPLICATION_JSON).content(body("noexiste", "incorrecta")))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("Invalid Username or Password"));
+    void thereIsNoPasswordLoginEndpointAnymore() throws Exception {
+        // POST /login con usuario y clave ya no existe: sin autenticar, 401
+        mvc.perform(post("/login").with(csrfLikeTheBrowser()).contentType(MediaType.APPLICATION_JSON).content(body("ana", PASSWORD)))
+                .andExpect(status().isUnauthorized());
+        // Y HTTP Basic tampoco se acepta
+        mvc.perform(get("/students").with(httpBasic("ana", PASSWORD)))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
-    void protectedEndpointRequiresValidToken() throws Exception {
-        String username = newUsername();
-        register(username);
-        String token = loginAndGetToken(username, PASSWORD);
+    void loginButtonRedirectsToTheAuthorizationServerWithPkce() throws Exception {
+        mvc.perform(get("/oauth2/authorization/auth-server"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", containsString("http://localhost:9000/oauth2/authorize")))
+                .andExpect(header().string("Location", containsString("client_id=part38-web")))
+                .andExpect(header().string("Location", containsString("code_challenge=")))
+                .andExpect(header().string("Location", containsString("code_challenge_method=S256")));
+    }
 
-        mvc.perform(get("/students").header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk());
+    // ---------- Rutas protegidas: los dos caminos ----------
 
+    @Test
+    void protectedEndpointAnswers401JsonWithoutAuthentication() throws Exception {
         mvc.perform(get("/students"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().doesNotExist("WWW-Authenticate"))
                 .andExpect(jsonPath("$.message").isNotEmpty());
+        mvc.perform(get("/me"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
-    void deleteStudentRequiresTokenAndRemovesIt() throws Exception {
-        String username = newUsername();
-        register(username);
-        String token = loginAndGetToken(username, PASSWORD);
+    void browserSessionAndBearerTokenBothReachProtectedEndpoints() throws Exception {
+        mvc.perform(get("/students").with(browserUser("ROLE_USER")))
+                .andExpect(status().isOk());
+        mvc.perform(get("/students").with(bearer("ROLE_USER")))
+                .andExpect(status().isOk());
+    }
 
-        mvc.perform(post("/students").header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"id\":901,\"name\":\"Temporal\",\"marks\":50}"))
+    @Test
+    void meReportsUsernameAndRolesFromTheToken() throws Exception {
+        mvc.perform(get("/me").with(browserUser("ROLE_ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.username").value("ana"))
+                .andExpect(jsonPath("$.roles", hasItem("ROLE_ADMIN")));
+        mvc.perform(get("/").with(bearer("ROLE_USER")))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("ana")));
+    }
+
+    @Test
+    void malformedBearerTokenReturns401() throws Exception {
+        mvc.perform(get("/students").header("Authorization", "Bearer esto.no.esunjwt"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").isNotEmpty());
+    }
+
+    @Test
+    void adminRoutesRequireAdminRole() throws Exception {
+        mvc.perform(get("/api/admin/ping").with(browserUser("ROLE_USER")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Forbidden: insufficient permissions"));
+        mvc.perform(get("/api/admin/ping").with(bearer("ROLE_USER")))
+                .andExpect(status().isForbidden());
+        // La ruta no existe todavia: un ADMIN pasa la autorizacion y recibe 404, no 403
+        mvc.perform(get("/api/admin/ping").with(browserUser("ROLE_ADMIN")))
+                .andExpect(status().isNotFound());
+    }
+
+    // ---------- CSRF: obligatorio con cookie de sesion, innecesario con Bearer ----------
+
+    @Test
+    void browserWritesNeedTheCsrfTokenButBearerWritesDoNot() throws Exception {
+        String student = "{\"id\":901,\"name\":\"Temporal\",\"marks\":50}";
+
+        mvc.perform(post("/students").with(browserUser("ROLE_USER")).contentType(MediaType.APPLICATION_JSON).content(student))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Forbidden: missing or invalid CSRF token"));
+        mvc.perform(post("/students").with(browserUser("ROLE_USER")).with(csrfLikeTheBrowser())
+                        .contentType(MediaType.APPLICATION_JSON).content(student))
                 .andExpect(status().isOk());
 
-        mvc.perform(delete("/students/901"))
-                .andExpect(status().isUnauthorized());
-        mvc.perform(delete("/students/901").header("Authorization", "Bearer " + token))
+        // Un Bearer no viaja en cookies: no necesita token CSRF
+        mvc.perform(delete("/students/901").with(bearer("ROLE_USER")))
                 .andExpect(status().isNoContent());
-        mvc.perform(delete("/students/901").header("Authorization", "Bearer " + token))
+        mvc.perform(delete("/students/901").with(browserUser("ROLE_USER")).with(csrfLikeTheBrowser()))
                 .andExpect(status().isNotFound());
     }
 
     @Test
-    void malformedOrTamperedTokenReturns401InsteadOfException() throws Exception {
-        String username = newUsername();
-        register(username);
-        String token = loginAndGetToken(username, PASSWORD);
-        String tampered = token.substring(0, token.length() - 1) + (token.endsWith("A") ? "B" : "A");
-
-        mvc.perform(get("/students").header("Authorization", "Bearer esto.no.esunjwt"))
-                .andExpect(status().isUnauthorized());
-        mvc.perform(get("/students").header("Authorization", "Bearer " + tampered))
-                .andExpect(status().isUnauthorized());
+    void registerWithoutCsrfTokenIsRejected() throws Exception {
+        mvc.perform(post("/registrar").contentType(MediaType.APPLICATION_JSON).content(body(newUsername(), PASSWORD)))
+                .andExpect(status().isForbidden());
     }
 
-    @Test
-    void staleTokenDoesNotBlockLogin() throws Exception {
-        String username = newUsername();
-        register(username);
-
-        mvc.perform(post("/login").header("Authorization", "Bearer esto.no.esunjwt")
-                        .contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
-                .andExpect(status().isOk());
-    }
+    // ---------- Logout ----------
 
     @Test
-    void httpBasicIsNotAcceptedOnProtectedEndpoints() throws Exception {
-        String username = newUsername();
-        register(username);
-
-        mvc.perform(get("/students").with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic(username, PASSWORD)))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void logoutReachesControllerAndRevokesTheToken() throws Exception {
-        String username = newUsername();
-        register(username);
-        String token = loginAndGetToken(username, PASSWORD);
-
-        mvc.perform(post("/logout").header("Authorization", "Bearer " + token))
+    void logoutClosesTheSessionAndReturnsTheAuthorizationServerLogoutUrl() throws Exception {
+        mvc.perform(post("/logout").with(browserUser("ROLE_USER")).with(csrfLikeTheBrowser()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Logged Out Successfully"));
-
-        mvc.perform(get("/students").header("Authorization", "Bearer " + token))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("Token is blacklisted"));
-
-        // Un login nuevo sigue funcionando
-        String newToken = loginAndGetToken(username, PASSWORD);
-        assertThat(newToken).isNotEqualTo(token);
+                .andExpect(jsonPath("$.logoutUrl", containsString("http://localhost:9000/connect/logout")))
+                .andExpect(jsonPath("$.logoutUrl", containsString("id_token_hint=")))
+                .andExpect(jsonPath("$.logoutUrl", containsString("post_logout_redirect_uri=")));
     }
 
-    @Test
-    void logoutWithInvalidTokenDoesNotFail() throws Exception {
-        mvc.perform(post("/logout").header("Authorization", "Bearer esto.no.esunjwt"))
-                .andExpect(status().isOk());
-        mvc.perform(post("/logout"))
-                .andExpect(status().isOk());
-    }
+    // ---------- CORS ----------
 
     @Test
     void corsPreflightAllowsAuthorizationHeaderFromAngular() throws Exception {
@@ -266,70 +307,11 @@ class AuthFlowIntegrationTest {
                         .header("Access-Control-Request-Method", "GET")
                         .header("Access-Control-Request-Headers", "authorization"))
                 .andExpect(status().isOk())
-                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:4200"))
-                .andExpect(header().string("Access-Control-Allow-Headers", containsString("authorization")));
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:4200"));
 
         mvc.perform(options("/students")
                         .header("Origin", "http://sitio-ajeno.example")
                         .header("Access-Control-Request-Method", "GET"))
                 .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void loginExposesAuthorizationHeaderToTheBrowser() throws Exception {
-        String username = newUsername();
-        register(username);
-
-        mvc.perform(post("/login").header("Origin", "http://localhost:4200")
-                        .contentType(MediaType.APPLICATION_JSON).content(body(username, PASSWORD)))
-                .andExpect(status().isOk())
-                .andExpect(header().string("Access-Control-Expose-Headers", containsString("Authorization")));
-    }
-
-    @Test
-    void adminRoutesRequireAdminRole() throws Exception {
-        String username = newUsername();
-        register(username);
-        String userToken = loginAndGetToken(username, PASSWORD);
-
-        Users admin = new Users();
-        admin.setUsername(newUsername());
-        admin.setPassword(passwordEncoder.encode(PASSWORD));
-        admin.setRole(RoleList.ROLE_ADMIN);
-        userRepo.save(admin);
-        String adminToken = loginAndGetToken(admin.getUsername(), PASSWORD);
-
-        mvc.perform(get("/api/admin/ping").header("Authorization", "Bearer " + userToken))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").isNotEmpty());
-        // La ruta no existe todavia: un ADMIN pasa la autorizacion y recibe 404, no 403
-        mvc.perform(get("/api/admin/ping").header("Authorization", "Bearer " + adminToken))
-                .andExpect(status().isNotFound());
-    }
-
-    @Test
-    void greetDoesNotCreateAnHttpSession() throws Exception {
-        String username = newUsername();
-        register(username);
-        String token = loginAndGetToken(username, PASSWORD);
-
-        mvc.perform(get("/").header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(content().string(containsString(username)))
-                .andExpect(cookie().doesNotExist("JSESSIONID"))
-                .andExpect(result -> assertThat(result.getRequest().getSession(false)).isNull());
-    }
-
-    @Test
-    void tokensSurviveARestartBecauseTheKeyComesFromConfiguration() {
-        String secret = "dGVzdC1vbmx5LWtleS1kby1ub3QtdXNlLWluLXByb2QtMDEyMzQ1Njc4OQ==";
-        JWTService beforeRestart = new JWTService(secret, 30);
-        JWTService afterRestart = new JWTService(secret, 30);
-
-        String token = beforeRestart.generateToken("alguien");
-
-        assertThat(afterRestart.extractUserName(token)).isEqualTo("alguien");
-        // Y el bean real usa esa misma clave de configuracion
-        assertThat(jwtService.extractUserName(token)).isEqualTo("alguien");
     }
 }

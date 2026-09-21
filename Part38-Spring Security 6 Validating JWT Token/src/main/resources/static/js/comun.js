@@ -21,3 +21,24 @@ async function leerMensajeDeError(response, porDefecto) {
     return porDefecto;
   }
 }
+
+function leerCookie(nombre) {
+  const par = document.cookie.split('; ').find(c => c.startsWith(nombre + '='));
+  return par ? decodeURIComponent(par.substring(nombre.length + 1)) : null;
+}
+
+// Cabeceras para fetch. La sesion viaja sola en una cookie HttpOnly que este JavaScript no puede
+// leer (ya no hay token en localStorage). Lo que si se agrega es el token CSRF: el servidor lo deja
+// en la cookie XSRF-TOKEN y hay que devolverlo en la cabecera X-XSRF-TOKEN; una pagina de otro
+// sitio no puede leer esa cookie, asi que no puede falsificar la peticion.
+function cabecerasJson() {
+  const cabeceras = {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json'
+  };
+  const csrf = leerCookie('XSRF-TOKEN');
+  if (csrf) {
+    cabeceras['X-XSRF-TOKEN'] = csrf;
+  }
+  return cabeceras;
+}
