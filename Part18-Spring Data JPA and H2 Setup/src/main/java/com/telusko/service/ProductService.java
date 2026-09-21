@@ -21,6 +21,7 @@ public class ProductService {
     }
 
     public void addProduct(Product prod) {
+    	System.out.println("voya a agregar");
         products.add(prod);
     }
 
